@@ -1,0 +1,28 @@
+.letters {
+  background: black;
+  padding: 0;
+  margin: 0;
+  list-style-type: none;
+  display: grid;
+  grid-template-columns: repeat(5, 20%);
+  grid-auto-rows: 120px;
+  justify-items: center;
+  align-items: center;
+}
+
+.letter {
+  padding: 0;
+  margin: 0;
+  width: 60px;
+  height: 60px;
+  text-align: center;
+  line-height: 60px;
+  list-style-type: none;
+  color: white;
+  font-size: 3em;
+}
+
+.letter.active {
+  background: blueviolet;
+  color: white;
+}

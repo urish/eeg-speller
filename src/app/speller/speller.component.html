@@ -1,0 +1,7 @@
+<button mat-button (click)="spell()">Spell</button>
+<ul class="letters">
+  <li *ngFor="let letter of letters" class="letter"
+    [class.active]="isActive(letter)">
+    {{letter}}
+  </li>
+</ul>
