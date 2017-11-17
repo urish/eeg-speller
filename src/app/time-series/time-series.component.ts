@@ -1,32 +1,24 @@
 import { Component, ElementRef, Input, AfterViewInit } from '@angular/core';
 import { OnInit, OnDestroy } from '@angular/core';
 import { Observable } from 'rxjs/Observable';
+import { Subject } from 'rxjs/Subject';
 import { SmoothieChart, TimeSeries } from 'smoothie';
 import { channelNames, EEGReading, zipSamples } from 'muse-js';
+import { map, groupBy, filter, mergeMap, takeUntil } from 'rxjs/operators';
 import * as Fili from 'fili';
 
-export class BandpassFilter {
-  readonly firCalculator = new Fili.FirCoeffs();
-  private readonly filter: any;
+function bandpass(samplingFreq: number, lowFreq: number, highFreq: number) {
+  const firCalculator = new Fili.FirCoeffs();
+  const Coefficients = firCalculator.bandpass({
+    order: 101,
+    Fs: samplingFreq,
+    F2: lowFreq,
+    F1: highFreq,
+  });
+  const filterInstance = new Fili.FirFilter(Coefficients);
 
-  constructor(samplingFreq: number, lowFreq: number, highFreq: number) {
-    const Coefficients = this.firCalculator.bandpass({
-      order: 101,
-      Fs: samplingFreq,
-      F2: lowFreq,
-      F1: highFreq,
-    });
-
-    this.filter = new Fili.FirFilter(Coefficients);
-  }
-
-  next(value: number) {
-    return this.filter.singleStep(value);
-  }
+  return (value: number) => filterInstance.singleStep(value) as number;
 }
-
-import 'rxjs/add/observable/interval';
-import 'rxjs/add/operator/take';
 
 const samplingFrequency = 256;
 
@@ -41,6 +33,7 @@ export class TimeSeriesComponent implements OnInit, OnDestroy, AfterViewInit {
 
   filter = true;
 
+  readonly destroy = new Subject<void>();
   readonly channels = 4;
   readonly channelNames = channelNames.slice(0, this.channels);
   readonly amplitudes = [];
@@ -75,19 +68,15 @@ export class TimeSeriesComponent implements OnInit, OnDestroy, AfterViewInit {
   readonly canvases = Array(this.channels).fill(0).map(() => new SmoothieChart(this.options));
 
   private readonly lines = Array(this.channels).fill(0).map(() => new TimeSeries());
-  private readonly bandpassFilters: BandpassFilter[] = [];
 
   constructor(private view: ElementRef) {
-    for (let i = 0; i < this.channels; i++) {
-      this.bandpassFilters[i] = new BandpassFilter(samplingFrequency, 1, 30);
-    }
   }
 
-  get AmplitudeScale() {
+  get amplitudeScale() {
     return this.canvases[0].options.maxValue;
   }
 
-  set AmplitudeScale(value: number) {
+  set amplitudeScale(value: number) {
     for (const canvas of this.canvases) {
       canvas.options.maxValue = value;
       canvas.options.minValue = -value;
@@ -104,6 +93,30 @@ export class TimeSeriesComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
+  ngOnInit() {
+    this.addTimeSeries();
+    this.data.pipe(
+      zipSamples,
+      takeUntil(this.destroy),
+      mergeMap(sampleSet =>
+        sampleSet.data.slice(0, this.channels).map((value, electrode) => ({
+          timestamp: sampleSet.timestamp, value, electrode
+        }))),
+      groupBy(sample => sample.electrode),
+      mergeMap(group => {
+        const bandpassFilter = bandpass(samplingFrequency, 1, 30);
+        const conditionalFilter = value => this.filter ? bandpassFilter(value) : value;
+        return group.pipe(
+          filter(sample => !isNaN(sample.value)),
+          map(sample => ({ ...sample, value: conditionalFilter(sample.value) })),
+        );
+      })
+    )
+      .subscribe(sample => {
+        this.draw(sample.timestamp, sample.value, sample.electrode);
+      });
+  }
+
   ngAfterViewInit() {
     const channels = this.view.nativeElement.querySelectorAll('canvas');
     this.canvases.forEach((canvas, index) => {
@@ -111,15 +124,8 @@ export class TimeSeriesComponent implements OnInit, OnDestroy, AfterViewInit {
     });
   }
 
-  ngOnInit() {
-    this.addTimeSeries();
-    this.data
-      .pipe(zipSamples)
-      .subscribe(sample => {
-        sample.data.slice(0, this.channels).forEach((electrode, index) => {
-          this.draw(sample.timestamp, electrode, index);
-        });
-      });
+  ngOnDestroy() {
+    this.destroy.next();
   }
 
   addTimeSeries() {
@@ -132,21 +138,10 @@ export class TimeSeriesComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   draw(timestamp: number, amplitude: number, index: number) {
-    const filter = this.bandpassFilters[index];
-    if (this.filter && !isNaN(amplitude)) {
-      amplitude = filter.next(amplitude);
-    }
-
-    if (!isNaN(amplitude)) {
-      this.uMeans[index] = 0.995 * this.uMeans[index] + 0.005 * amplitude;
-      this.uVrms[index] = Math.sqrt(0.995 * this.uVrms[index] ** 2 + 0.005 * (amplitude - this.uMeans[index]) ** 2);
-    }
+    this.uMeans[index] = 0.995 * this.uMeans[index] + 0.005 * amplitude;
+    this.uVrms[index] = Math.sqrt(0.995 * this.uVrms[index] ** 2 + 0.005 * (amplitude - this.uMeans[index]) ** 2);
 
     this.lines[index].append(timestamp, amplitude);
     this.amplitudes[index] = amplitude.toFixed(2);
   }
-
-  ngOnDestroy() {
-  }
-
 }
